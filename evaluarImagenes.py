@@ -2,102 +2,76 @@
 import torch
 import cv2
 import argparse
-#import numpy as np
 import os
-import glob
-import mysql.connector
-from mysql.connector import errorcode
-from config import DB_CONFIG
 
 # Leemos el modelo
-def evaluarDefectos(img, conf_thres):
-    model = torch.hub.load('./','custom','./best.pt',source='local', force_reload=True)
-
+def evaluarDefectos(img, conf_thres, modelo):
+    model = torch.hub.load('./', 'custom', modelo, source='local', force_reload=True)
     results = model(img)
     data = results.pandas().xyxy[0]
+    return data
 
-    return (data)
+def evaluarDefectosEnCarpeta(carpetapath, conf_thres, modelo):
+    for imagen_path in os.listdir(carpetapath):
+        if imagen_path.endswith(('.jpg', '.jpeg', '.png')):
+            imagen_path = os.path.join(carpetapath, imagen_path)
+            imagen = cv2.imread(imagen_path)
 
-def insertarResultadosEnBD(resultados, img):
-    try:
-        # Establecer la conexión a la base de datos
-        conn = mysql.connector.connect(**DB_CONFIG)
-        
-        cursor = conn.cursor()
+            # Evalúa el enfoque de la imagen
+            resultado = evaluarDefectos(imagen, conf_thres, modelo)
 
-        # Insertar resultados en la base de datos
-        for i in range(len(resultados['name'])):
-            label = resultados['name'][i]
-            confidence = resultados['confidence'][i]
+            confidence = resultado['confidence']
+            label = resultado['name']
 
-            query = "INSERT INTO resultados (label, confidence, model, img) VALUES (%s, %s, %s, %s)"
-            values = (label, confidence, 'Blur - Best_p', img)
+            try:
+                print(f"\nResultados para la imagen {imagen_path}:")
+                for i in range(len(label)):
+                    print(f"{label[i]}: {round(confidence[i] * 100, 1)}%")
 
-            cursor.execute(query, values)
+                # Guarda la información en un archivo de texto en el mismo directorio que la imagen
+                output_file = f'resultados_{os.path.basename(imagen_path)}.txt'
+                with open(output_file, 'w') as file:
+                    for l, c in zip(label, confidence):
+                        file.write(f"{l}: {round(c * 100, 1)}%\n")
 
-        # Confirmar la transacción y cerrar la conexión
-        conn.commit()
-        cursor.close()
-        conn.close()
+                print(f"La información se ha guardado en {os.path.abspath(output_file)}")
 
-    except mysql.connector.Error as err:
-        if err.errno == errorcode.ER_ACCESS_DENIED_ERROR:
-            print("Error: Acceso denegado. Verifica las credenciales.")
-        elif err.errno == errorcode.ER_BAD_DB_ERROR:
-            print("Error: Base de datos no existe.")
-        else:
-            print(f"Error: {err}")
-    finally:
-        if conn.is_connected():
-            conn.close()
-
-def evaluarDefectosEnCarpeta(carpetapath, conf_thres):
-
-    for imagen_path in glob.glob(os.path.join(carpetapath, '*.jpg')):
-        imagen = cv2.imread(imagen_path)
-
-        # Evaluar el enfoque de la imagen
-        resultados = evaluarDefectos(imagen, conf_thres)
-
-        try:
-            for i in range(len(resultados['name'])):
-                print(resultados['name'][i], ": ", round(resultados['confidence'][i] * 100, 1), "%")
-        except Exception as e:
-            print(e)
-
-        # Insertar resultados en la base de datos
-        insertarResultadosEnBD(resultados, imagen_path)
+            except Exception as e:
+                print(e)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--source', type=str, default='inference/images', help='source')  # file/folder, 0 for webcam
     parser.add_argument('--conf_thres', type=int, default=0.5, help='confidence threshold')
+    parser.add_argument('--model', type=str, default='ModelBlur.pt', help='ubicacion modelo')
     opt = parser.parse_args()
-    #print(opt)
 
     # Si se proporciona una carpeta como fuente, procesar todas las imágenes en la carpeta
     if os.path.isdir(opt.source):
-        evaluarDefectosEnCarpeta(opt.source, opt.conf_thres)
+        evaluarDefectosEnCarpeta(opt.source, opt.conf_thres, opt.model)
     else:
         # Carga la imagen
         imagen_path = opt.source
         imagen = cv2.imread(imagen_path)
 
         # Evalúa el enfoque de la imagen
-        resultado = evaluarDefectos(imagen,opt.conf_thres)
+        resultado = evaluarDefectos(imagen, opt.conf_thres, opt.model)
 
         confidence = resultado['confidence']
         label = resultado['name']
 
-        #print(resultado)
         try:
+            print(f"\nResultados para la imagen {imagen_path}:")
             for i in range(len(label)):
-                print(label[i],": ",round(confidence[i]*100,1),"%")
+                print(f"{label[i]}: {round(confidence[i] * 100, 1)}%")
+
+            # Guarda la información en un archivo de texto en el mismo directorio que la imagen
+            output_file = f'resultados_{os.path.basename(imagen_path)}.txt'
+            with open(output_file, 'w') as file:
+                for l, c in zip(label, confidence):
+                    file.write(f"{l}: {round(c * 100, 1)}%\n")
+
+            print(f"La información se ha guardado en {os.path.abspath(output_file)}")
+
         except Exception as e:
-                print(e)
-            
-        # Insertar resultados en la base de datos
-        insertarResultadosEnBD(resultado, imagen_path)
-
-
-        
+            print(e)
